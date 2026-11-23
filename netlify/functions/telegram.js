@@ -27,18 +27,30 @@ export default async (req) => {
         `https://api.telegram.org/bot${TOKEN}/sendMessage`,
         {
           method: "POST",
-          headers: {"Content-Type": "application/json"},
+          headers: {
+            "Content-Type": "application/json"
+          },
           body: JSON.stringify({
             chat_id: chatId,
             text,
-            parse_mode: "HTML"
+            parse_mode: "HTML",
+            disable_web_page_preview: false
           })
         }
       );
     };
 
+    if (address === "/start" || address === "/help") {
+      await reply(
+        "🚀 <b>WELCOME TO MAESTRO+</b>\n\n" +
+        "Send a Solana token contract address " +
+        "to receive live market information."
+      );
+      return new Response("OK");
+    }
+
     if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) {
-      await reply("Send a valid Solana contract address.");
+      await reply("⚠️ Send a valid Solana contract address.");
       return new Response("OK");
     }
 
@@ -46,30 +58,81 @@ export default async (req) => {
       `https://api.dexscreener.com/token-pairs/v1/solana/${address}`
     );
 
-    const pairs = await response.json();
-
-    if (!Array.isArray(pairs) || pairs.length === 0) {
-      await reply("Coin not found on DexScreener.");
+    if (!response.ok) {
+      await reply("⚠️ Unable to retrieve coin information. Try again.");
       return new Response("OK");
     }
 
-    const coin = pairs[0];
-    const name = coin.baseToken?.name || "Unknown";
-    const symbol = coin.baseToken?.symbol || "Unknown";
+    const pairs = await response.json();
+
+    if (!Array.isArray(pairs) || pairs.length === 0) {
+      await reply("❌ Coin not found on DexScreener.");
+      return new Response("OK");
+    }
+
+    const coin = pairs.reduce((best, current) =>
+      (current.liquidity?.usd || 0) >
+      (best.liquidity?.usd || 0) ? current : best
+    );
+
+    const escapeHTML = (value) =>
+      String(value).replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[char]);
+
+    const money = (value) =>
+      value == null
+        ? "N/A"
+        : "$" + Number(value).toLocaleString("en-US", {
+            maximumFractionDigits: 2
+          });
+
+    const name = escapeHTML(coin.baseToken?.name || "Unknown");
+    const symbol = escapeHTML(coin.baseToken?.symbol || "Unknown");
+
+    const price = coin.priceUsd
+      ? "$" + Number(coin.priceUsd).toLocaleString("en-US", {
+          maximumFractionDigits: 12
+        })
+      : "N/A";
+
+    const volume = coin.volume?.h24;
+    const change = coin.priceChange?.h24;
+    const buys = coin.txns?.h24?.buys ?? "N/A";
+    const sells = coin.txns?.h24?.sells ?? "N/A";
+    const dex = escapeHTML(coin.dexId || "Unknown");
+
+    const chartUrl =
+      `https://dexscreener.com/solana/${encodeURIComponent(
+        coin.pairAddress || address
+      )}`;
 
     await reply(
       `🔎 <b>MAESTRO+ COIN SCANNER</b>\n\n` +
-      `🪙 Name: ${name}\n` +
-      `💎 Symbol: ${symbol}\n` +
-      `💵 Price: $${coin.priceUsd || "N/A"}\n` +
-      `📊 Market Cap: $${coin.marketCap ?? "N/A"}\n` +
-      `💧 Liquidity: $${coin.liquidity?.usd ?? "N/A"}\n\n` +
-      `📍 Network: Solana\n` +
-      `📄 Contract: <code>${address}</code>`
+      `🪙 <b>Name:</b> ${name}\n` +
+      `💎 <b>Symbol:</b> ${symbol}\n` +
+      `💵 <b>Price:</b> ${price}\n` +
+      `📊 <b>Market Cap:</b> ${money(coin.marketCap)}\n` +
+      `💧 <b>Liquidity:</b> ${money(coin.liquidity?.usd)}\n` +
+      `📈 <b>24H Volume:</b> ${money(volume)}\n` +
+      `📉 <b>24H Change:</b> ${change == null ? "N/A" : change + "%"}\n\n` +
+      `🟢 <b>24H Buys:</b> ${buys}\n` +
+      `🔴 <b>24H Sells:</b> ${sells}\n\n` +
+      `🌐 <b>Network:</b> Solana\n` +
+      `🏦 <b>DEX:</b> ${dex}\n` +
+      `📄 <b>Contract:</b> <code>${address}</code>\n\n` +
+      `📊 <a href="${chartUrl}">VIEW DEXSCREENER CHART</a>`
     );
 
     return new Response("OK");
+
   } catch (error) {
-    return new Response("Error", {status: 500});
+    return new Response("Internal error", {
+      status: 500
+    });
   }
 };
